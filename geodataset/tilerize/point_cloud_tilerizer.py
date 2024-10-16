@@ -83,6 +83,7 @@ class PointCloudTilerizer:
         self.downsample_voxel_size = downsample_voxel_size
         self.verbose = verbose
         self.force = force
+        self.annotation_type = "unlabeled"
 
         if self.tiles_metadata is None:
             assert (
@@ -97,7 +98,7 @@ class PointCloudTilerizer:
         ), f"Number of max possible tiles {len(self.tiles_metadata)} exceeds the maximum number of tiles {max_tile}"
 
         self.pc_tiles_folder_path = (
-            self.output_path / f"pc_tiles_{self.downsample_voxel_size}"
+            self.output_path / f"pc_tiles_{self.tiles_metadata.extension}_{self.downsample_voxel_size}"
             if self.downsample_voxel_size
             else self.output_path / "pc_tiles"
         )
@@ -111,7 +112,7 @@ class PointCloudTilerizer:
     ):
         name_convention = PointCloudTileNameConvention()
 
-        product_name = self.point_cloud_path.stem.split(".")[0].replace("-", "_")
+        product_name = self.point_cloud_path.stem.split(".")[0].replace("-", "_") 
         
         if suffix:
             product_name = f"{product_name}_{suffix}"
@@ -133,7 +134,7 @@ class PointCloudTilerizer:
                     y_bound = [y, y + self.tile_side_length]
 
                     tile_name = name_convention.create_name(
-                        product_name=product_name, tile_id=f"{counter}", row=i, col=j
+                        product_name=product_name, annotation_type=self.annotation_type, tile_id=f"{counter}", row=i, col=j
                     )
 
                     tile_md = TileMetadata(
@@ -186,7 +187,7 @@ class PointCloudTilerizer:
                 if len(data) == 0:
                     continue
 
-                pcd = self._laspy_to_o3d(data, self.keep_dims.copy())
+                pcd = self._laspy_to_o3d(data, self.keep_dims.copy(), extension=tile_md.extension)
                 if self.downsample_voxel_size:
                     pcd = self._downsample_tile(pcd, self.downsample_voxel_size)
                 pcd = self._keep_unique_points(pcd)
@@ -196,7 +197,7 @@ class PointCloudTilerizer:
                 )
                 o3d.t.io.write_point_cloud(str(downsampled_tile_path), pcd)
 
-        self.tiles_metadata = TileMetadataCollection(new_tile_md_list)
+        self.tiles_metadata = TileMetadataCollection(new_tile_md_list, product_name=self.tiles_metadata.product_name)
 
     def tilerize(
         self,
@@ -285,7 +286,9 @@ class PointCloudTilerizer:
 
         plt.savefig(self.output_path / f"{self.tiles_metadata.product_name}_aois.png")
 
-    def _laspy_to_o3d(self, pc_file: Path, keep_dims: List[str]):
+    def _laspy_to_o3d(self, pc_file: Path, keep_dims: List[str], extension: str):
+        
+        float_type = np.float32
         dimensions = list(pc_file.point_format.dimension_names)
 
         if keep_dims == "ALL":
@@ -295,33 +298,35 @@ class PointCloudTilerizer:
         assert all([dim in dimensions for dim in keep_dims])
 
         pc = np.ascontiguousarray(
-            np.vstack([pc_file.x, pc_file.y, pc_file.z]).T.astype(np.float64)
+            np.vstack([pc_file.x, pc_file.y, pc_file.z]).T.astype(float_type)
         )
 
         map_to_tensors = {}
-        map_to_tensors["positions"] = pc.astype(np.float64)
+        map_to_tensors["positions"] = pc.astype(float_type)
 
         keep_dims.remove("X")
         keep_dims.remove("Y")
         keep_dims.remove("Z")
 
         if "red" in keep_dims and "green" in keep_dims and "blue" in keep_dims:
-            pc_colors = (
-                np.ascontiguousarray(
+            colors = np.ascontiguousarray(
                     np.vstack([pc_file.red, pc_file.green, pc_file.blue]).T.astype(
-                        np.float64
+                        float_type
                     )
                 )
-                / 255
-            )
-            map_to_tensors["colors"] = pc_colors.astype(np.float64)
 
+            if extension == "pcd":
+                pc_colors = np.round(colors/255)
+                map_to_tensors["colors"] = pc_colors.astype(np.uint8)
+            else:
+                map_to_tensors["colors"] = colors.astype(float_type)
+            
             keep_dims.remove("red")
             keep_dims.remove("blue")
             keep_dims.remove("green")
 
         for dim in keep_dims:
-            dim_value = np.ascontiguousarray(pc_file[dim]).astype(np.float64)
+            dim_value = np.ascontiguousarray(pc_file[dim]).astype(float_type)
 
             assert len(dim_value.shape) == 1
             dim_value = dim_value.reshape(-1, 1)

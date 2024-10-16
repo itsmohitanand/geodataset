@@ -76,7 +76,7 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
         coco_categories_list: List[dict] = None,
         aois_config: Union[AOIFromPackageConfig, None] = None,
         min_intersection_ratio: float = 0.9,
-        ignore_tiles_without_labels: bool = False,
+        ignore_tiles_without_labels: bool = True,
         geopackage_layer_name: str = None,
         main_label_category_column: str = None,
         other_labels_attributes_column: List[str] = None,
@@ -104,20 +104,19 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
         self.coco_categories_list = coco_categories_list
         self.downsample_voxel_size = downsample_voxel_size
         self.tile_overlap = tile_overlap
-        self.tile_overlap = tile_overlap
         self.keep_dims = keep_dims if keep_dims is not None else "ALL"
         self.verbose = verbose
         self.max_tile = max_tile
         self.force = force
-
         self.tile_side_length = tile_side_length
+        self.annotation_type = "labeled"
 
         assert self.tile_overlap < 1.0, "Tile overlap should be less than 1.0"
 
         self.pc_tiles_folder_path = (
-            self.output_path / f"pc_tiles_{self.downsample_voxel_size}"
+            self.output_path / f"pc_tiles_{self.tiles_metadata.extension}_{self.downsample_voxel_size}"
             if self.downsample_voxel_size
-            else self.output_path / "pc_tiles"
+            else self.output_path / f"pc_tiles_{self.tiles_metadata.extension}"
         )
         self.annotation_folder_path = self.output_path / "annotations"
 
@@ -150,8 +149,6 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
             len(self.tiles_metadata) < max_tile
         ), f"Number of max possible tiles {len(self.tiles_metadata)} exceeds the maximum number of tiles {max_tile}"
 
-        if self.use_rle_for_labels:
-            assert self.til
         super().create_folder()
 
     def create_category_to_id_map(self):
@@ -267,6 +264,7 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
         final_aoi_labels = {aoi: [] for aoi in list(aois_tiles.keys()) + ["all"]}
 
         for aoi in aois_tiles:
+            tiles_to_remove = []
             for tile_id in aois_tiles[aoi]:
                 labels_crs_coords = intersected_labels_aois[
                     intersected_labels_aois["tile_id"] == tile_id
@@ -303,10 +301,15 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
 
                 if self.ignore_tiles_without_labels and len(labels_tiles_coords) == 0:
                     print(f"Removing tile {tile_id} from AOI {aoi} as it has no labels")
+                    tiles_to_remove.append(tile_id)
                     continue
 
                 final_aoi_labels[aoi].append(labels_tiles_coords)
                 final_aoi_labels["all"].append(labels_tiles_coords)
+            
+
+            for id in tiles_to_remove:
+                aois_tiles[aoi].remove(id)
 
         return aois_tiles, final_aoi_labels
 
@@ -339,7 +342,7 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
 
                 if len(data) == 0:
                     continue
-                pcd = super()._laspy_to_o3d(data, self.keep_dims.copy())
+                pcd = super()._laspy_to_o3d(data, self.keep_dims.copy(), tile_md.extension)
 
                 if self.downsample_voxel_size:
                     pcd = super()._downsample_tile(pcd, self.downsample_voxel_size)

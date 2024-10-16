@@ -281,17 +281,17 @@ class AoiTilesImageConvention(FileNameConvention):
 class PointCloudTileNameConvention(FileNameConvention):
     @staticmethod
     def _validate_name(name):
-        pattern = r"^.*pc_tile_((sf|gr)[0-9]+p[0-9]+_)?(vs[0-9]+p[0-9]+_)?[0-9]+_[0-9]+_id_[0-9]+\.(ply|las|pcd)$"
+        pattern = r"^.*pc_tile_(labeled|unlabeled)_((sf|gr)[0-9]+p[0-9]+_)?(vs[0-9]+p[0-9]+_)?[0-9]+_[0-9]+_id_[0-9]+\.(ply|las|pcd)$"
         if not re.match(pattern, name):
             raise ValueError(f"tile_name {name} does not match the expected format {pattern}.")
         else:
             return True
 
     @staticmethod
-    def create_name(product_name: str, tile_id:str, scale_factor=None, ground_resolution=None, voxel_size=None, extension='pcd', row=None, col=None):
+    def create_name(product_name: str, annotation_type:str, tile_id:str, scale_factor=None, ground_resolution=None, voxel_size=None, extension='pcd', row=None, col=None):
         assert extension in ["pcd", "ply", "las"], f"Extension must be either 'ply' or 'las', not {extension}."
         specifier = FileNameConvention.create_specifier(scale_factor=scale_factor, ground_resolution=ground_resolution, voxel_size=voxel_size)
-        tile_name = f"{product_name}_pc_tile_{specifier}_{row}_{col}_id_{tile_id}.{extension}"
+        tile_name = f"{product_name}_{annotation_type}_pc_tile_{specifier}_{row}_{col}_id_{tile_id}.{extension}"
         PointCloudTileNameConvention._validate_name(tile_name)
         return tile_name
 
@@ -301,10 +301,12 @@ class PointCloudTileNameConvention(FileNameConvention):
 
         parts = tile_name.split("_pc_tile_")
         product_name = parts[0]
-        specifier, col, row, _, tile_id_extension = parts[1].rsplit("_", 4)
+        annotation_specifier, col, row, _, tile_id_extension = parts[1].rsplit("_", 4)
+        annotation, specifier = annotation_specifier.split("_",1)
         tile_id, extension = tile_id_extension.split(".")
 
         scale_factor, ground_resolution, voxel_size = FileNameConvention.parse_specifier(specifier)
 
-        return product_name, scale_factor, ground_resolution, voxel_size, int(col), int(row), int(tile_id)
+        parse = dict(product_name=product_name, annotation=annotation, scale_factor=scale_factor, ground_resolution=ground_resolution, voxel_size=voxel_size, col=int(col), row=int(row), tile_id=int(tile_id), extension=extension)
+        return parse
     

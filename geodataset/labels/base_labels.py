@@ -235,6 +235,6 @@ class PolygonLabels(BaseLabels):
         ind = list(overlap_set)
         labels_gdf = labels_gdf[~(labels_gdf.id.isin(ind))]
 
-        print(f"Removing {len(ind)} overlapping polygons")
+        print(f"Removing {len(ind)} overlapping polygons out of {labels_gdf.shape[0]}")
 
         return labels_gdf

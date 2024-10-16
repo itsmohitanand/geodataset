@@ -77,9 +77,7 @@ def polygon_to_mask(polygon: Union[Polygon, MultiPolygon], array_height: int, ar
         cv2.fillPoly(binary_mask, [contours], 1)
 
     if isinstance(polygon, Polygon):
-        ic(binary_mask.sum())
         process_polygon(polygon)
-        ic(binary_mask.sum())
     elif isinstance(polygon, MultiPolygon):
         for polygon in polygon.geoms:
             process_polygon(polygon)

@@ -69,6 +69,7 @@ class TileMetadata:
             tile_name
         ), f"Invalid output_filename: {tile_name}"
 
+        self.extension = PointCloudTileNameConvention.parse_name(tile_name)["extension"]
         self.tile_name = tile_name
         self.id = id
 
@@ -140,6 +141,8 @@ class TileMetadataCollection:
     def __init__(self, tile_metadata_list: List[TileMetadata], product_name=Union[str, None]):
         self.product_name = product_name
         self.tile_metadata_list = tile_metadata_list
+        self.extension = None
+
         self.min_x, self.max_x, self.min_y, self.max_y, self.min_z, self.max_z = (
             self._calculate_bounds()
         )
@@ -188,6 +191,10 @@ class TileMetadataCollection:
         self.height = self.tile_metadata_list[0].height
         assert all([True if i.width == self.tile_metadata_list[0].width else False for i in self.tile_metadata_list]), "All tiles must have the same width"
         self.width = self.tile_metadata_list[0].width
+
+        if all([True if i.extension == self.tile_metadata_list[0].extension else False for i in self.tile_metadata_list]):
+            self.extension = self.tile_metadata_list[0].extension
+        
         
         self.gdf = self._create_gdf()
         self.tile_id_to_idx = {tile_id: idx for idx, tile_id in enumerate([tile.id for tile in self.tile_metadata_list])}
