@@ -227,7 +227,7 @@ class PointCloudTilerizer:
             processing_queue.put(tile_md)
 
         # List to hold only successfully processed tiles
-        self.new_tile_md_list = []  # Defined as a class attribute to access within threads
+        self.new_tile_md_list = []  # Updated when the processing is done for a tile
 
         # Number of threads dedicated to processing (each thread will also write after processing)
         num_processing_threads = 4
