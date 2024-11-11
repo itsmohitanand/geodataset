@@ -367,71 +367,11 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
 
     def tilerize(self):
         self._generate_labels()
-        self._tilerize()
+        super()._tilerize()
         super().plot_aois()
 
-    def _tilerize(self):
-        # Queue for tiles to be processed
-        processing_queue = Queue()
-
-        # Add tiles to the processing queue
-        tile_md_list = [tile_md for tile_md in self.tiles_metadata]
-        for tile_md in tile_md_list:
-            processing_queue.put(tile_md)
-
-        # List to hold only successfully processed tiles
-        self.new_tile_md_list = []  # Defined as a class attribute to access within threads
-
-        # Number of threads dedicated to processing (each thread will also write after processing)
-        num_processing_threads = 4
-
-        # Start threads for processing and writing
-        with tqdm(total=len(tile_md_list), desc="Processing tiles") as progress_bar:
-            # Start threads for processing and writing
-            processors = []
-            for i in range(num_processing_threads):
-                processor_thread = Thread(
-                    target=self._process_and_write_tile,
-                    args=(processing_queue, progress_bar),
-                )
-                processor_thread.start()
-                processors.append(processor_thread)
-
-            # Wait for all processing tasks to complete
-            processing_queue.join()
-
-        # Print summary
-        print(
-            f"Finished tilerizing. Number of tiles generated: {len(self.new_tile_md_list)}."
-        )
-        print(
-            f"Number of tiles removed: {len(tile_md_list) - len(self.new_tile_md_list)}."
-        )
-
-        # Update tiles metadata
-        self.tiles_metadata = PointCloudTileMetadataCollection(
-            self.new_tile_md_list, product_name=self.tiles_metadata.product_name
-        )
-
-    def _process_and_write_tile(self, processing_queue, progress_bar):
-        while not processing_queue.empty():
-            tile_md = processing_queue.get()
-            try:
-                # Process the tile
-                pcd = self._process_tile(tile_md)
-                if pcd is not None:
-                    # Write the processed tile data immediately
-                    self._write_tile(pcd, tile_md)
-                    # Append to new_tile_md_list if processing was successful
-                    self.new_tile_md_list.append(tile_md)
-
-                progress_bar.update(1)
-            except Exception as e:
-                print(f"Error processing or writing tile {tile_md}: {e}")
-            finally:
-                processing_queue.task_done()
-
     def _process_tile(self, tile_md):
+        # Override the process_tile method to add labels to the tiles
         with CopcReader.open(self.point_cloud_path) as reader:
             data = super().query_tile(tile_md, reader)
 
@@ -460,21 +400,6 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
             )
 
             return map_to_tensor
-
-    def _write_tile(self, map_to_tensor, tile_md):
-        try:
-            downsampled_tile_path = (
-                self.pc_tiles_folder_path / f"{tile_md.aoi}/{tile_md.tile_name}"
-            )
-            for k, v in map_to_tensor.items():
-                if v.shape[1] == 1:
-                    map_to_tensor[k] = v.reshape((-1, 1))
-
-            pcd = o3d.t.geometry.PointCloud(map_to_tensor)
-            o3d.t.io.write_point_cloud(str(downsampled_tile_path), pcd)
-            print(f"Written tile {tile_md.tile_id}")
-        except Exception as e:
-            print(f"Error writing tile {tile_md}: {e}")
 
     def _generate_tile_metadata(self, **kwargs):
         return super()._generate_tile_metadata(**kwargs)

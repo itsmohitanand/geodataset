@@ -312,7 +312,6 @@ class PointCloudTilerizer:
 
             pcd = o3d.t.geometry.PointCloud(map_to_tensor)
             o3d.t.io.write_point_cloud(str(downsampled_tile_path), pcd)
-            print(f"Written tile {tile_md.tile_id}")
         except Exception as e:
             print(f"Error writing tile {tile_md}: {e}")
 
