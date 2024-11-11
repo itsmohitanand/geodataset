@@ -16,7 +16,9 @@ class AOIForRasterBase(ABC):
         for aoi in aois_tiles:
             tiles = aois_tiles[aoi]
 
-            if 'actual_name' in aois_config.aois[aoi]:
+            #Temporary fix for the actual_name issue
+            # if 'actual_name' in aois_config.aois[aoi]:
+            if 'actual_name' in aois_config.aois:
                 actual_name = aois_config.aois[aoi]['actual_name']
                 aois_gdf.loc[aois_gdf['aoi'] == aoi, 'aoi'] = actual_name
                 for tile in tiles:

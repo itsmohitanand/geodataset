@@ -1,4 +1,7 @@
 import warnings
+from pathlib import Path
+from queue import Queue
+from threading import Thread
 from typing import List, Union
 
 import geopandas as gpd
@@ -10,12 +13,14 @@ from tqdm import tqdm
 
 from geodataset.aoi import AOIFromPackageConfig
 from geodataset.aoi.aoi_base import AOIBaseFromGeoFileInCRS
-from geodataset.utils import PointCloudCOCOGenerator, strip_all_extensions_and_path
-from geodataset.labels.base_labels import PolygonLabels
 from geodataset.geodata.point_cloud_tile import PointCloudTileMetadataCollection
+from geodataset.labels.base_labels import PolygonLabels
 from geodataset.tilerize.point_cloud_tilerizer import PointCloudTilerizer
-from geodataset.utils.file_name_conventions import PointCloudCocoNameConvention, validate_and_convert_product_name
-from pathlib import Path
+from geodataset.utils import PointCloudCOCOGenerator, strip_all_extensions_and_path
+from geodataset.utils.file_name_conventions import (
+    PointCloudCocoNameConvention,
+    validate_and_convert_product_name,
+)
 
 
 class LabeledPointCloudTilerizer(PointCloudTilerizer):
@@ -66,12 +71,11 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
         Whether to force the tilerization, by default False. Useful for job submissions
     """
 
-
     def __init__(
         self,
-        point_cloud_path:Union[str,Path],
-        labels_path:Union[str,Path],
-        output_path:Union[str,Path],
+        point_cloud_path: Union[str, Path],
+        labels_path: Union[str, Path],
+        output_path: Union[str, Path],
         tiles_metadata: Union[PointCloudTileMetadataCollection, None] = None,
         coco_categories_list: List[dict] = None,
         aois_config: Union[AOIFromPackageConfig, None] = None,
@@ -91,7 +95,9 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
         tile_side_length: float = None,
     ) -> None:
         self.point_cloud_path = Path(point_cloud_path)
-        self.product_name = validate_and_convert_product_name(strip_all_extensions_and_path(self.point_cloud_path))
+        self.product_name = validate_and_convert_product_name(
+            strip_all_extensions_and_path(self.point_cloud_path)
+        )
         self.label_path = labels_path
         self.output_path = Path(output_path)
         self.tiles_metadata = tiles_metadata
@@ -142,8 +148,13 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
             self.populate_tiles_metadata()
 
         if self.use_rle_for_labels:
-            assert self.tiles_metadata is not None, "Tile metadata is required for RLE encoding (image height and width)"
-            assert self.tiles_metadata.height is not None and self.tiles_metadata.width is not None, "Height and width of the tiles are required for RLE encoding"
+            assert (
+                self.tiles_metadata is not None
+            ), "Tile metadata is required for RLE encoding (image height and width)"
+            assert (
+                self.tiles_metadata.height is not None
+                and self.tiles_metadata.width is not None
+            ), "Height and width of the tiles are required for RLE encoding"
 
         assert (
             len(self.tiles_metadata) < max_tile
@@ -153,7 +164,9 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
         #     assert self.til #??
         # Processing AOIs
         if self.aois_config is None:
-            raise Exception("Please provide an aoi_config. Currently don't support 'None'.")
+            raise Exception(
+                "Please provide an aoi_config. Currently don't support 'None'."
+            )
         self.aoi_engine = AOIBaseFromGeoFileInCRS(aois_config)
         self.aois_in_both = self._check_aois_in_both_tiles_and_config()
 
@@ -249,9 +262,11 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
         tiles_gdf = self.tiles_metadata.gdf
         aois_gdf = aois_gdf.to_crs(tiles_gdf.crs)
 
-        if 'aoi' not in tiles_gdf or ('aoi' in tiles_gdf and tiles_gdf['aoi'].isnull().all()):
+        if "aoi" not in tiles_gdf or (
+            "aoi" in tiles_gdf and tiles_gdf["aoi"].isnull().all()
+        ):
             # only keeping 'aoi' column from aois_gdf, ignoring the one from tiles_gdf as it is same info if set
-            tiles_gdf = tiles_gdf.drop(columns=['aoi'])
+            tiles_gdf = tiles_gdf.drop(columns=["aoi"])
 
             aois_gdf.crs = tiles_gdf.crs
             intersections = gpd.overlay(tiles_gdf, aois_gdf, how="intersection")
@@ -260,7 +275,9 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
                 intersections.groupby("tile_id")["intersection_area"].idxmax()
             ]
             aois_tiles = (
-                max_intersection_per_tile.groupby("aoi")["tile_id"].apply(list).to_dict()
+                max_intersection_per_tile.groupby("aoi")["tile_id"]
+                .apply(list)
+                .to_dict()
             )
         else:
             # just use tiles_gdf, no need to overlay
@@ -326,7 +343,7 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
 
                 final_aoi_labels[aoi].append(labels_tiles_coords)
                 final_aoi_labels["all"].append(labels_tiles_coords)
-            
+
             for id in tiles_to_remove:
                 aois_tiles[aoi].remove(id)
 
@@ -354,36 +371,110 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
         super().plot_aois()
 
     def _tilerize(self):
-        new_tile_md_list = []
-        with CopcReader.open(self.point_cloud_path) as reader:
-            reader_crs = reader.header.parse_crs()
-            for tile_md in tqdm(self.tiles_metadata):
-                data = super().query_tile(tile_md, reader)
+        # Queue for tiles to be processed
+        processing_queue = Queue()
 
-                if len(data) == 0:
-                    continue
-                pcd = super()._laspy_to_o3d(data, self.keep_dims.copy() if type(self.keep_dims) is not str else self.keep_dims)
+        # Add tiles to the processing queue
+        tile_md_list = [tile_md for tile_md in self.tiles_metadata]
+        for tile_md in tile_md_list:
+            processing_queue.put(tile_md)
 
-                if self.downsample_voxel_size:
-                    pcd = super()._downsample_tile(pcd, self.downsample_voxel_size)
-                pcd = self._keep_unique_points(pcd)
-                pcd = self._remove_points_outside_aoi(pcd, tile_md, reader_crs)
-                tile_labels = self._get_tile_labels(
-                    tile_md.tile_id, self.aoi_tiles.copy(), self.aoi_labels.copy()
+        # List to hold only successfully processed tiles
+        self.new_tile_md_list = []  # Defined as a class attribute to access within threads
+
+        # Number of threads dedicated to processing (each thread will also write after processing)
+        num_processing_threads = 4
+
+        # Start threads for processing and writing
+        with tqdm(total=len(tile_md_list), desc="Processing tiles") as progress_bar:
+            # Start threads for processing and writing
+            processors = []
+            for i in range(num_processing_threads):
+                processor_thread = Thread(
+                    target=self._process_and_write_tile,
+                    args=(processing_queue, progress_bar),
                 )
-                tile_labels = tile_labels.to_crs(reader_crs)
-                pcd = self._add_labels(pcd, tile_labels, reader_crs)
-                new_tile_md_list.append(tile_md)
+                processor_thread.start()
+                processors.append(processor_thread)
 
-                downsampled_tile_path = (
-                    self.pc_tiles_folder_path / f"{tile_md.aoi}/{tile_md.tile_name}"
-                )
-                o3d.t.io.write_point_cloud(str(downsampled_tile_path), pcd)
+            # Wait for all processing tasks to complete
+            processing_queue.join()
 
-        print(f"Finished tilerizing. Number of tiles generated: {len(new_tile_md_list)}.")
-        self.tiles_metadata = PointCloudTileMetadataCollection(
-            new_tile_md_list, product_name=self.tiles_metadata.product_name
+        # Print summary
+        print(
+            f"Finished tilerizing. Number of tiles generated: {len(self.new_tile_md_list)}."
         )
+        print(
+            f"Number of tiles removed: {len(tile_md_list) - len(self.new_tile_md_list)}."
+        )
+
+        # Update tiles metadata
+        self.tiles_metadata = PointCloudTileMetadataCollection(
+            self.new_tile_md_list, product_name=self.tiles_metadata.product_name
+        )
+
+    def _process_and_write_tile(self, processing_queue, progress_bar):
+        while not processing_queue.empty():
+            tile_md = processing_queue.get()
+            try:
+                # Process the tile
+                pcd = self._process_tile(tile_md)
+                if pcd is not None:
+                    # Write the processed tile data immediately
+                    self._write_tile(pcd, tile_md)
+                    # Append to new_tile_md_list if processing was successful
+                    self.new_tile_md_list.append(tile_md)
+
+                progress_bar.update(1)
+            except Exception as e:
+                print(f"Error processing or writing tile {tile_md}: {e}")
+            finally:
+                processing_queue.task_done()
+
+    def _process_tile(self, tile_md):
+        with CopcReader.open(self.point_cloud_path) as reader:
+            data = super().query_tile(tile_md, reader)
+
+            if len(data) == 0:
+                return None
+
+            map_to_tensor = super()._laspy_to_o3d(data, keep_dims=self.keep_dims.copy())
+
+            if self.downsample_voxel_size:
+                map_to_tensor = super()._downsample_tile(
+                    map_to_tensor,
+                    self.downsample_voxel_size,
+                    keep_dims=self.keep_dims.copy(),
+                )
+
+            map_to_tensor = self._keep_unique_points(map_to_tensor)
+            map_to_tensor = self._remove_points_outside_aoi(
+                map_to_tensor, tile_md, reader.header.parse_crs()
+            )
+            tile_labels = self._get_tile_labels(
+                tile_md.tile_id, self.aoi_tiles.copy(), self.aoi_labels.copy()
+            )
+            tile_labels = tile_labels.to_crs(reader.header.parse_crs())
+            map_to_tensor = self._add_labels(
+                map_to_tensor, tile_labels, reader.header.parse_crs()
+            )
+
+            return map_to_tensor
+
+    def _write_tile(self, map_to_tensor, tile_md):
+        try:
+            downsampled_tile_path = (
+                self.pc_tiles_folder_path / f"{tile_md.aoi}/{tile_md.tile_name}"
+            )
+            for k, v in map_to_tensor.items():
+                if v.shape[1] == 1:
+                    map_to_tensor[k] = v.reshape((-1, 1))
+
+            pcd = o3d.t.geometry.PointCloud(map_to_tensor)
+            o3d.t.io.write_point_cloud(str(downsampled_tile_path), pcd)
+            print(f"Written tile {tile_md.tile_id}")
+        except Exception as e:
+            print(f"Error writing tile {tile_md}: {e}")
 
     def _generate_tile_metadata(self, **kwargs):
         return super()._generate_tile_metadata(**kwargs)
@@ -410,7 +501,11 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
                 continue
 
             aoi_tiles_metadata = PointCloudTileMetadataCollection(
-                [tile for tile in self.tiles_metadata if tile.tile_id in self.aoi_tiles[aoi]]
+                [
+                    tile
+                    for tile in self.tiles_metadata
+                    if tile.tile_id in self.aoi_tiles[aoi]
+                ]
             )
 
             polygons = [x["geometry"].to_list() for x in labels]
@@ -479,10 +574,10 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
 
         return coco_paths, categories_coco, category_to_id_map
 
-    def _add_labels(self, pcd, tile_labels, reader_crs):
+    def _add_labels(self, map_to_tensor, tile_labels, reader_crs):
         # Create a geodataframe for all the points
 
-        positions = pcd.point.positions.numpy()
+        positions = map_to_tensor["positions"]
         geopoints = gpd.GeoDataFrame(positions)
         geopoints = gpd.GeoDataFrame(geopoints.apply(lambda x: Point(x), axis=1))
         geopoints.columns = ["points"]
@@ -496,7 +591,7 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
                 return np.nan
 
         if tile_labels.empty is False:
-            tile_labels.drop(columns=['level_0'], errors='ignore', inplace=True)
+            tile_labels.drop(columns=["level_0"], errors="ignore", inplace=True)
 
             joined_label = tile_labels.sjoin(
                 geopoints, how="right", predicate="contains"
@@ -516,9 +611,13 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
                 positions, points
             ), f"The points are not in the same order for {tile_labels['tile_id']}"
 
-            joined_label[self.main_label_category_column_name] = joined_label[self.main_label_category_column_name].apply(category_to_id)
+            joined_label[self.main_label_category_column_name] = joined_label[
+                self.main_label_category_column_name
+            ].apply(category_to_id)
 
-            semantic_labels = joined_label[self.main_label_category_column_name].values.reshape((-1, 1))
+            semantic_labels = joined_label[
+                self.main_label_category_column_name
+            ].values.reshape((-1, 1))
             instance_labels = joined_label["instance_id"].values.reshape((-1, 1))
 
         else:
@@ -536,22 +635,10 @@ class LabeledPointCloudTilerizer(PointCloudTilerizer):
             semantic_labels = np.nan * np.ones((positions.shape[0], 1))
             instance_labels = np.nan * np.ones((positions.shape[0], 1))
 
-        tensor_map = {}
-        for k, v in pcd.point.items():
-            v = v.numpy()
-            if len(v.shape) == 1:
-                value = v.reshape((-1, 1))
-            else:
-                value = v
+        map_to_tensor["semantic_labels"] = semantic_labels.astype(np.float32)
+        map_to_tensor["instance_labels"] = instance_labels.astype(np.float32)
 
-            tensor_map[k] = value
-
-        tensor_map["semantic_labels"] = semantic_labels
-        tensor_map["instance_labels"] = instance_labels
-
-        new_pcd = o3d.t.geometry.PointCloud(tensor_map)
-
-        return new_pcd
+        return map_to_tensor
 
     def _get_tile_labels(self, tile_id, aois_tiles, aoi_labels):
         aoi = self._get_aoi_from_tile_id(tile_id, aois_tiles)
