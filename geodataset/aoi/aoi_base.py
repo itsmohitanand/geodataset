@@ -16,7 +16,7 @@ class AOIForRasterBase(ABC):
         for aoi in aois_tiles:
             tiles = aois_tiles[aoi]
 
-            #Temporary fix for the actual_name issue
+            #FIXME: This is causing the error: KeyError: 'actual_name'
             # if 'actual_name' in aois_config.aois[aoi]:
             if 'actual_name' in aois_config.aois:
                 actual_name = aois_config.aois[aoi]['actual_name']

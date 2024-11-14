@@ -27,6 +27,8 @@ from geodataset.utils.file_name_conventions import (
     validate_and_convert_product_name,
 )
 
+from concurrent.futures import ThreadPoolExecutor
+
 
 class PointCloudTilerizer:
     """
@@ -217,66 +219,77 @@ class PointCloudTilerizer:
 
         return data
 
-    def _tilerize(self):
+    def _tilerize(self, n_thread=2):
         # Queue for tiles to be processed
-        processing_queue = Queue()
 
-        # Add tiles to the processing queue
+        
+        self.tile_to_remove = []  # Updated when the processing is done for a tile
+
+        print(f"Starting tilerization with {n_thread} threads.")
+        if 9 > n_thread > 1:
+            self._tilerize_multi_threaded(num_processing_threads=n_thread)
+        elif n_thread == 1:
+            self._tilerize_single_threaded()
+        else:
+            raise ValueError("n_thread should be greater than 0 and less than 9")
+
+        new_tile_md_list = [tile_md for tile_md in self.tiles_metadata if tile_md not in self.tile_to_remove]
+
+        # Print summary
+        print(
+            f"Finished tilerizing. Number of tiles generated: {len(new_tile_md_list)}."
+        )
+        print(
+            f"Number of tiles removed: {len(self.tiles_metadata) - len(new_tile_md_list)}."
+        )
+
+        tile_md_list = [tile_md for tile_md in self.tiles_metadata if tile_md not in self.tile_to_remove]
+        # Update tiles metadata
+        self.tiles_metadata = PointCloudTileMetadataCollection(
+            new_tile_md_list, product_name=self.tiles_metadata.product_name
+        )
+
+    def _tilerize_multi_threaded(self, num_processing_threads):
+        
         tile_md_list = [tile_md for tile_md in self.tiles_metadata]
-        for tile_md in tile_md_list:
-            processing_queue.put(tile_md)
-
-        # List to hold only successfully processed tiles
-        self.new_tile_md_list = []  # Updated when the processing is done for a tile
-
-        # Number of threads dedicated to processing (each thread will also write after processing)
-        num_processing_threads = 4
 
         # Start threads for processing and writing
         with tqdm(total=len(tile_md_list), desc="Processing tiles") as progress_bar:
             # Start threads for processing and writing
-            processors = []
-            for i in range(num_processing_threads):
-                processor_thread = Thread(
-                    target=self._process_and_write_tile,
-                    args=(processing_queue, progress_bar),
-                )
-                processor_thread.start()
-                processors.append(processor_thread)
+            
+            with ThreadPoolExecutor(max_workers=num_processing_threads) as executor:
+                futures = [
+                    executor.submit(self._process_and_write_tile, tile_md, progress_bar)
+                    for tile_md in tile_md_list
+                ]
+                for future in futures:
+                    future.result()
 
-            # Wait for all processing tasks to complete
-            processing_queue.join()
 
-        # Print summary
-        print(
-            f"Finished tilerizing. Number of tiles generated: {len(self.new_tile_md_list)}."
-        )
-        print(
-            f"Number of tiles removed: {len(tile_md_list) - len(self.new_tile_md_list)}."
-        )
+    def _tilerize_single_threaded(self):
+        tile_md_list = [tile_md for tile_md in self.tiles_metadata]
 
-        # Update tiles metadata
-        self.tiles_metadata = PointCloudTileMetadataCollection(
-            self.new_tile_md_list, product_name=self.tiles_metadata.product_name
-        )
+        with tqdm(total=len(tile_md_list), desc="Processing tiles") as progress_bar:
+            for tile_md in tile_md_list:
+                self._process_and_write_tile(tile_md, progress_bar)
+    
 
-    def _process_and_write_tile(self, processing_queue, progress_bar):
-        while not processing_queue.empty():
-            tile_md = processing_queue.get()
-            try:
-                # Process the tile
-                pcd = self._process_tile(tile_md)
-                if pcd is not None:
-                    # Write the processed tile data immediately
-                    self._write_tile(pcd, tile_md)
-                    # Append to new_tile_md_list if processing was successful
-                    self.new_tile_md_list.append(tile_md)
+    def _process_and_write_tile(self, tile_md, progress_bar):
+        """Process and write a single tile."""
+        try:
+            # Process the tile
+            pcd = self._process_tile(tile_md)
+            if pcd is not None:
+                # Write the processed tile data immediately
+                self._write_tile(pcd, tile_md)
+            else:
+                self.tile_to_remove.append(tile_md)
 
-                progress_bar.update(1)
-            except Exception as e:
-                print(f"Error processing or writing tile {tile_md}: {e}")
-            finally:
-                processing_queue.task_done()
+            progress_bar.update(1)
+
+        except Exception as e:
+            print(f"Error processing or writing tile {tile_md}: {e}")
+            progress_bar.update(1)
 
     def _process_tile(self, tile_md):
         with CopcReader.open(self.point_cloud_path) as reader:
